@@ -17,11 +17,6 @@ import http.client
 
 import numpy as np
 
-
-def _dec(s):
-    return base64.b64decode(s).decode("utf-8")
-
-
 try:
     import torch
 except ImportError:
@@ -41,7 +36,7 @@ MSG_GENERIC = "生成失败，请稍后重试"
 
 _VIOLATION_KEYS = [
     "safety", "content_policy", "blocklist", "blocked", "policy",
-    "violat", _dec("Im1vZGVyYXRpb24i"), "disallowed", "abuse",
+    "violat", "moderation", "disallowed", "abuse",
     "sexual", "porn", "explicit", "inappropriate", "nudity",
     "违法", "违规", "内容", "色情", "审核", "不适宜",
 ]
@@ -72,7 +67,7 @@ _SERIES_MODEL = {
         "4K": "gemini-3-pro-image-preview-4k",
     },
     "banana_v21": {
-        "4K": _dec("ImdlbWluaS1uYW5vLWJhbmFuYS0yLjEtNGsi"),
+        "4K": "gemini-nano-banana-2.1-4k",
     },
 }
 
@@ -278,7 +273,7 @@ def _generate(model, prompt, aspect, api_key, seed=-1, timeout=1200):
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
     for extra in _build_variants(seed):
-        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {_dec("ImFzcGVjdFJhdGlvIg=="): aspect}}
+        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
         cfg.update(extra)
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -311,7 +306,7 @@ def _edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=1200):
                     "data": base64.b64encode(b).decode("ascii"),
                 }
             })
-        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {_dec("ImFzcGVjdFJhdGlvIg=="): aspect}}
+        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
         cfg.update(extra)
         payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": cfg}
         try:
@@ -660,7 +655,7 @@ def _br_poll_task(tid, api_key, timeout):
                 if u:
                     return u
             raise RuntimeError(MSG_GENERIC)
-        if st in ("failed", "expired", _dec("ImNhbmNlbGxlZCI="), _dec("ImNhbmNlbGVkIg==")):
+        if st in ("failed", "expired", "cancelled", "canceled"):
             msg = data.get("statusMessage") or data.get("error") or ""
             friendly = _categorize_text(msg)
             if friendly:
@@ -718,7 +713,7 @@ def _img_generate(base_url, model, prompt, size, quality, api_key, seed=-1, time
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
     for extra in _br_build_variants(quality, seed):
-        payload = {"model": model, "prompt": prompt, "size": size, _dec("Im1vZGVyYXRpb24i"): "low"}
+        payload = {"model": model, "prompt": prompt, "size": size, "moderation": "low"}
         if response_format:
             payload["response_format"] = response_format
         payload.update(extra)
@@ -741,7 +736,7 @@ def _br_generate(model, prompt, size, quality, api_key, seed=-1, timeout=1200):
     last = None
     for extra in _br_build_variants(quality, seed):
         body = {"model": model, "prompt": prompt, "n": 1, "size": size, "output_format": "png",
-                _dec("Im1vZGVyYXRpb24i"): "low"}
+                "moderation": "low"}
         body.update(extra)
         for attempt in range(2):
             try:
@@ -764,7 +759,7 @@ def _br_generate(model, prompt, size, quality, api_key, seed=-1, timeout=1200):
                     raise
                 last = e
                 continue
-            return _br_download_retry(img_url, 240)
+            return _br_download_retry(img_url, 1200)
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
@@ -776,7 +771,7 @@ def _img_edits(base_url, model, prompt, size, quality, ref_items, api_key, seed=
     url = base_url + "/v1/images/edits"
     last = None
     for variant in _br_build_variants(quality, seed):
-        fields = {"model": model, "prompt": prompt, "size": size, _dec("Im1vZGVyYXRpb24i"): "low"}
+        fields = {"model": model, "prompt": prompt, "size": size, "moderation": "low"}
         if response_format:
             fields["response_format"] = response_format
         fields.update({k: str(v) for k, v in variant.items()})
@@ -802,7 +797,7 @@ def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout
     last = None
     for extra in _br_build_variants(quality, seed):
         body = {"model": model, "prompt": prompt, "n": 1, "size": size, "output_format": "png",
-                _dec("Im1vZGVyYXRpb24i"): "low"}
+                "moderation": "low"}
         body["images"] = [_img_bytes_to_data_url(b) for n, b in ref_items]
         body.update(extra)
         for attempt in range(2):
@@ -826,7 +821,7 @@ def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout
                     raise
                 last = e
                 continue
-            return _br_download_retry(img_url, 240)
+            return _br_download_retry(img_url, 1200)
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
@@ -863,7 +858,7 @@ def _int_or(v, d):
         return d
 
 
-def _mj_prompt(prompt, aspect, stylize, seed, chaos=None, quality="4", no="", iw=None):
+def _mj_prompt(prompt, aspect, stylize, seed, chaos=None, quality="2", no="", iw=None):
     p = (prompt or "")[:900]
     if aspect and aspect != "auto":
         p += " --ar " + aspect
@@ -1153,14 +1148,14 @@ class _BRImage2Image(_BRText2Image):
 
 
 class NineWanLiPlugin5(_BRText2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yLjUtZmxhcmUi")
+    MODEL = "gpt-image-2.5-flare"
     RESOLUTIONS = RESOLUTION_CHOICES_NO_1K
     QUALITY_FIXED = "max"
     DESCRIPTION = "测试节点 请勿使用"
 
 
 class NineWanLiPlugin5_1(_BRImage2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yLjUtZmxhcmUi")
+    MODEL = "gpt-image-2.5-flare"
     RESOLUTIONS = RESOLUTION_CHOICES_NO_1K
     QUALITY_FIXED = "max"
     DESCRIPTION = "测试节点 请勿使用"
@@ -1224,25 +1219,25 @@ class _SMImage2Image(_SMText2Image):
 
 
 class NineWanLiPlugin6(_SMText2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yIg==")
+    MODEL = "gpt-image-2"
     RESOLUTIONS = RESOLUTION_CHOICES
     DESCRIPTION = "测试节点 请勿使用"
 
 
 class NineWanLiPlugin6_1(_SMImage2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yIg==")
+    MODEL = "gpt-image-2"
     RESOLUTIONS = RESOLUTION_CHOICES
     DESCRIPTION = "测试节点 请勿使用"
 
 
 class NineWanLiPlugin7(_SMText2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yLjUtZmxhcmUi")
+    MODEL = "gpt-image-2.5-flare"
     RESOLUTIONS = RESOLUTION_CHOICES
     DESCRIPTION = "测试节点 请勿使用"
 
 
 class NineWanLiPlugin7_1(_SMImage2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yLjUtZmxhcmUi")
+    MODEL = "gpt-image-2.5-flare"
     RESOLUTIONS = RESOLUTION_CHOICES
     DESCRIPTION = "测试节点 请勿使用"
 
@@ -1424,7 +1419,7 @@ for _cls in [NineWanLiPlugin2, NineWanLiPlugin2_1, NineWanLiPlugin3, NineWanLiPl
              NineWanLiPluginV8, NineWanLiPluginV8_1, NineWanLiPlugin5_6]:
     _cls.NODE_NAME = NODE_DISPLAY_NAME_MAPPINGS.get(_cls.__name__, _cls.__name__)
 
-_GR_BASE_URL = _dec("Imh0dHBzOi8vZ3JzYWkuZGFra2EuY29tLmNuIg==")
+_GR_BASE_URL = "https://grsai.dakka.com.cn"
 
 _GR_ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "9:21"]
 _GR_ASPECTS_WIDE = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "9:21", "4:1", "1:4", "8:1", "1:8"]
@@ -1494,18 +1489,18 @@ def _gr_req(method, path, api_key, data=None, params=None, timeout=120):
 
 
 def _gr_submit(model, prompt, api_key, ar=None, image_size=None, quality=None, images=None, seed=None, timeout=60):
-    payload = {"model": model, "prompt": prompt, _dec("InJlcGx5VHlwZSI="): _dec("ImFzeW5jIg==")}
+    payload = {"model": model, "prompt": prompt, "replyType": "async"}
     if ar:
-        payload[_dec("ImFzcGVjdFJhdGlvIg==")] = ar
+        payload["aspectRatio"] = ar
     if image_size:
-        payload[_dec("ImltYWdlU2l6ZSI=")] = image_size
+        payload["imageSize"] = image_size
     if quality:
         payload["quality"] = quality
     if images:
         payload["images"] = images
     if seed is not None and int(seed) >= 0:
         payload["seed"] = int(seed)
-    resp = _gr_req("POST", _dec("Ii92MS9hcGkvZ2VuZXJhdGUi"), api_key, payload, timeout=timeout)
+    resp = _gr_req("POST", "/v1/api/generate", api_key, payload, timeout=timeout)
     tid = resp.get("id")
     if not tid:
         raise RuntimeError(MSG_GENERIC)
@@ -1519,19 +1514,19 @@ def _gr_poll(tid, api_key, timeout):
         if remain <= 0:
             raise RuntimeError(MSG_TIMEOUT)
         try:
-            data = _gr_req("GET", _dec("Ii92MS9hcGkvcmVzdWx0Ig=="), api_key, params={"id": tid}, timeout=min(30, max(10, remain)))
+            data = _gr_req("GET", "/v1/api/result", api_key, params={"id": tid}, timeout=min(30, max(10, remain)))
         except Exception:
             time.sleep(3)
             continue
         st = data.get("status", "")
-        if st == _dec("InN1Y2NlZWRlZCI="):
-            urls = [x.get("url") for x in (data.get(_dec("InJlc3VsdHMi")) or []) if isinstance(x, dict) and x.get("url")]
+        if st == "succeeded":
+            urls = [x.get("url") for x in (data.get("results") or []) if isinstance(x, dict) and x.get("url")]
             if not urls:
                 raise RuntimeError(MSG_GENERIC)
             return urls
-        if st in ("failed", _dec("InZpb2xhdGlvbiI="), _dec("ImNhbmNlbGxlZCI="), _dec("ImNhbmNlbGVkIg==")):
-            reason = str(data.get(_dec("ImZhaWx1cmVfcmVhc29uIg==")) or "")
-            if _dec("Im1vZGVyYXRpb24i") in reason or st == _dec("InZpb2xhdGlvbiI="):
+        if st in ("failed", "violation", "cancelled", "canceled"):
+            reason = str(data.get("failure_reason") or "")
+            if "moderation" in reason or st == "violation":
                 raise RuntimeError(MSG_VIOLATION)
             msg = data.get("error") or ""
             if msg:
@@ -1750,46 +1745,205 @@ class _GRImage2Image(_GRText2Image):
         return (_pack_output(tensors),)
 
 
+_DR_MODEL = "doubao-seedream-5-0-260128"
+_DR_SIZES = {
+    "1:1": "2048x2048",
+    "4:3": "2304x1728",
+    "3:4": "1728x2304",
+    "16:9": "2560x1440",
+    "9:16": "1440x2560",
+    "3:2": "2496x1664",
+    "2:3": "1664x2496",
+    "21:9": "3024x1296",
+}
+_DR_ASPECTS = list(_DR_SIZES.keys())
+_DR_ASPECTS_EDIT = ["auto"] + _DR_ASPECTS
+
+
+def _dr_pick_size(w, h):
+    r = w / float(h) if h > 0 else 1.0
+    best = "2048x2048"
+    bd = 1e18
+    for ar, px in _DR_SIZES.items():
+        aw, ah = map(int, ar.split(":"))
+        d = abs(r - aw / float(ah))
+        if d < bd:
+            bd = d
+            best = px
+    return best
+
+
+def _dr_generate(prompt, api_key, size, images=None, timeout=1200):
+    body = {
+        "model": _DR_MODEL,
+        "prompt": prompt,
+        "size": size,
+        "response_format": "url",
+        "watermark": False,
+    }
+    if images:
+        body["image"] = images
+    headers = {
+        "Authorization": "Bearer " + api_key,
+        "Content-Type": "application/json",
+    }
+    url = _BR_BASE_URL + "/api/v3/images/generations"
+    raw = _request(url, json.dumps(body).encode("utf-8"), headers, timeout=timeout)
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise RuntimeError(MSG_GENERIC)
+    err = result.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        msg = str(err.get("message"))
+        friendly = _categorize_text(msg)
+        if friendly:
+            raise RuntimeError(friendly)
+        raise RuntimeError(MSG_GENERIC + "(" + msg.strip()[:100] + ")")
+    data = result.get("data") or []
+    urls = []
+    for d in data:
+        if not isinstance(d, dict):
+            continue
+        if d.get("error"):
+            continue
+        u = d.get("url")
+        if u:
+            urls.append(u)
+    if not urls:
+        raise RuntimeError(MSG_GENERIC)
+    tensors = []
+    for u in urls:
+        last = None
+        end = time.time() + 1200
+        done = False
+        for _ in range(3):
+            remain = int(end - time.time())
+            if remain <= 0:
+                break
+            try:
+                img = _br_fetch_image(u, min(120, remain))
+                tensors.append(_bytes_to_img_tensor(img))
+                done = True
+                break
+            except RuntimeError as e:
+                last = e
+        if not done:
+            raise last if last else RuntimeError(MSG_GENERIC)
+    return tensors
+
+
+class NineWanLiPluginD1:
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("图片",)
+    FUNCTION = "generate"
+    CATEGORY = CATEGORY
+    DESCRIPTION = "测试节点 请勿使用"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "api_key": ("STRING", {"default": "", "multiline": False, "display": "密钥"}),
+                "prompt": ("STRING", {"default": "", "multiline": True, "display": "提示词"}),
+                "aspect": (_DR_ASPECTS, {"default": "1:1", "display": "宽高比"}),
+                "seed": _seed_widget(),
+            },
+        }
+
+    def generate(self, api_key, prompt, aspect, seed=-1):
+        if not api_key:
+            raise RuntimeError(MSG_GENERIC + "(缺少密钥)")
+        size = _DR_SIZES.get(aspect, "2048x2048")
+        tensors = _dr_generate(prompt, api_key, size, None)
+        return (_pack_output(tensors),)
+
+
+class NineWanLiPluginD1_1:
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("图片",)
+    FUNCTION = "generate"
+    CATEGORY = CATEGORY
+    DESCRIPTION = "测试节点 请勿使用"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = {
+            "prompt": ("STRING", {"default": "", "multiline": True, "display": "提示词"}),
+        }
+        for i in range(1, 11):
+            optional["image_%d" % i] = ("IMAGE", {"display": "图%d" % i})
+        return {
+            "required": {
+                "api_key": ("STRING", {"default": "", "multiline": False, "display": "密钥"}),
+                "aspect": (_DR_ASPECTS_EDIT, {"default": "auto", "display": "宽高比"}),
+                "seed": _seed_widget(),
+            },
+            "optional": optional,
+        }
+
+    def generate(self, api_key, aspect, seed=-1, prompt="", **kwargs):
+        if not api_key:
+            raise RuntimeError(MSG_GENERIC + "(缺少密钥)")
+        imgs = [kwargs.get(k) for k in _IMAGE_KEYS]
+        slots = [(i + 1, imgs[i]) for i in range(10) if imgs[i] is not None]
+        if not slots:
+            size = _DR_SIZES.get(aspect, "2048x2048")
+            tensors = _dr_generate(prompt, api_key, size, None)
+            return (_pack_output(tensors),)
+        w, h = _ref_size(slots[0][1])
+        if aspect == "auto":
+            size = _dr_pick_size(w, h)
+        else:
+            size = _DR_SIZES.get(aspect, "2048x2048")
+        refs = []
+        for _, img in slots:
+            b = _img_tensor_to_bytes(img)[0]
+            refs.append("data:image/png;base64," + base64.b64encode(b).decode("ascii"))
+        tensors = _dr_generate(prompt, api_key, size, refs)
+        return (_pack_output(tensors),)
+
+
 class NineWanLiPluginM1(_GRText2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLTItbGl0ZSI=")
+    MODEL = "nano-banana-2-lite"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS
 
 
 class NineWanLiPluginM1_1(_GRImage2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLTItbGl0ZSI=")
+    MODEL = "nano-banana-2-lite"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS
 
 
 class NineWanLiPluginM3(_GRText2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLXBybyI=")
+    MODEL = "nano-banana-pro"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS
 
 
 class NineWanLiPluginM3_1(_GRImage2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLXBybyI=")
+    MODEL = "nano-banana-pro"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS
 
 
 class NineWanLiPluginM4(_GRText2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yIg==")
+    MODEL = "gpt-image-2"
     RESOLUTIONS = ["1K"]
     ASPECTS = list(_GR_GPT_STD)
     GPT_PIXELS = {"1K": _GR_GPT_STD}
 
 
 class NineWanLiPluginM4_1(_GRImage2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yIg==")
+    MODEL = "gpt-image-2"
     RESOLUTIONS = ["1K"]
     ASPECTS = list(_GR_GPT_STD)
     GPT_PIXELS = {"1K": _GR_GPT_STD}
 
 
 class NineWanLiPluginM5(_GRText2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yLjUtZmxhcmUi")
+    MODEL = "gpt-image-2.5-flare"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = list(_GR_GPT_VIP["1K"])
     GPT_PIXELS = _GR_GPT_VIP
@@ -1797,7 +1951,7 @@ class NineWanLiPluginM5(_GRText2Image):
 
 
 class NineWanLiPluginM5_1(_GRImage2Image):
-    MODEL = _dec("ImdwdC1pbWFnZS0yLjUtZmxhcmUi")
+    MODEL = "gpt-image-2.5-flare"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = list(_GR_GPT_VIP["1K"])
     GPT_PIXELS = _GR_GPT_VIP
@@ -1805,25 +1959,25 @@ class NineWanLiPluginM5_1(_GRImage2Image):
 
 
 class NineWanLiPluginM6(_GRText2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLTIuMSI=")
+    MODEL = "nano-banana-2.1"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS_WIDE
 
 
 class NineWanLiPluginM6_1(_GRImage2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLTIuMSI=")
+    MODEL = "nano-banana-2.1"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS_WIDE
 
 
 class NineWanLiPluginMV2(_GRText2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLTIi")
+    MODEL = "nano-banana-2"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS_WIDE
 
 
 class NineWanLiPluginMV2_1(_GRImage2Image):
-    MODEL = _dec("Im5hbm8tYmFuYW5hLTIi")
+    MODEL = "nano-banana-2"
     RESOLUTIONS = RESOLUTION_CHOICES
     ASPECTS = _GR_ASPECTS_WIDE
 
@@ -1841,26 +1995,31 @@ NODE_CLASS_MAPPINGS.update({
     "NineWanLiPluginM6_1": NineWanLiPluginM6_1,
     "NineWanLiPluginMV2": NineWanLiPluginMV2,
     "NineWanLiPluginMV2_1": NineWanLiPluginMV2_1,
+    "NineWanLiPluginD1": NineWanLiPluginD1,
+    "NineWanLiPluginD1_1": NineWanLiPluginD1_1,
 })
 
 NODE_DISPLAY_NAME_MAPPINGS.update({
-    "NineWanLiPluginM1": "云1",
-    "NineWanLiPluginM1_1": "云1.1",
-    "NineWanLiPluginM3": "云3",
-    "NineWanLiPluginM3_1": "云3.1",
-    "NineWanLiPluginM4": "云4",
-    "NineWanLiPluginM4_1": "云4.1",
-    "NineWanLiPluginM5": "云5",
-    "NineWanLiPluginM5_1": "云5.1",
-    "NineWanLiPluginM6": "云6",
-    "NineWanLiPluginM6_1": "云6.1",
-    "NineWanLiPluginMV2": "云V2",
-    "NineWanLiPluginMV2_1": "云V2.1",
+    "NineWanLiPluginM1": "咪咪1",
+    "NineWanLiPluginM1_1": "咪咪1.1",
+    "NineWanLiPluginM3": "咪咪3",
+    "NineWanLiPluginM3_1": "咪咪3.1",
+    "NineWanLiPluginM4": "咪咪4",
+    "NineWanLiPluginM4_1": "咪咪4.1",
+    "NineWanLiPluginM5": "咪咪5",
+    "NineWanLiPluginM5_1": "咪咪5.1",
+    "NineWanLiPluginM6": "咪咪6",
+    "NineWanLiPluginM6_1": "咪咪6.1",
+    "NineWanLiPluginMV2": "咪咪V2",
+    "NineWanLiPluginMV2_1": "咪咪V2.1",
+    "NineWanLiPluginD1": "逗逗1",
+    "NineWanLiPluginD1_1": "逗逗1.1",
 })
 
 for _cls in [NineWanLiPluginM1, NineWanLiPluginM1_1, NineWanLiPluginM3, NineWanLiPluginM3_1,
              NineWanLiPluginM4, NineWanLiPluginM4_1, NineWanLiPluginM5, NineWanLiPluginM5_1,
-             NineWanLiPluginM6, NineWanLiPluginM6_1, NineWanLiPluginMV2, NineWanLiPluginMV2_1]:
+             NineWanLiPluginM6, NineWanLiPluginM6_1, NineWanLiPluginMV2, NineWanLiPluginMV2_1,
+             NineWanLiPluginD1, NineWanLiPluginD1_1]:
     _cls.NODE_NAME = NODE_DISPLAY_NAME_MAPPINGS.get(_cls.__name__, _cls.__name__)
 NODE_CLASS_MAPPINGS.update({
     "木木2": NineWanLiPlugin2,
@@ -1878,18 +2037,20 @@ NODE_CLASS_MAPPINGS.update({
     "南南V8": NineWanLiPluginV8,
     "南南V8.1": NineWanLiPluginV8_1,
     "南南5.6": NineWanLiPlugin5_6,
-    "云1": NineWanLiPluginM1,
-    "云1.1": NineWanLiPluginM1_1,
-    "云3": NineWanLiPluginM3,
-    "云3.1": NineWanLiPluginM3_1,
-    "云4": NineWanLiPluginM4,
-    "云4.1": NineWanLiPluginM4_1,
-    "云5": NineWanLiPluginM5,
-    "云5.1": NineWanLiPluginM5_1,
-    "云6": NineWanLiPluginM6,
-    "云6.1": NineWanLiPluginM6_1,
-    "云V2": NineWanLiPluginMV2,
-    "云V2.1": NineWanLiPluginMV2_1,
+    "咪咪1": NineWanLiPluginM1,
+    "咪咪1.1": NineWanLiPluginM1_1,
+    "咪咪3": NineWanLiPluginM3,
+    "咪咪3.1": NineWanLiPluginM3_1,
+    "咪咪4": NineWanLiPluginM4,
+    "咪咪4.1": NineWanLiPluginM4_1,
+    "咪咪5": NineWanLiPluginM5,
+    "咪咪5.1": NineWanLiPluginM5_1,
+    "咪咪6": NineWanLiPluginM6,
+    "咪咪6.1": NineWanLiPluginM6_1,
+    "咪咪V2": NineWanLiPluginMV2,
+    "咪咪V2.1": NineWanLiPluginMV2_1,
+    "逗逗1": NineWanLiPluginD1,
+    "逗逗1.1": NineWanLiPluginD1_1,
 })
 
 NODE_DISPLAY_NAME_MAPPINGS.update({
@@ -1908,16 +2069,18 @@ NODE_DISPLAY_NAME_MAPPINGS.update({
     "南南V8": "南南V8",
     "南南V8.1": "南南V8.1",
     "南南5.6": "南南5.6",
-    "云1": "云1",
-    "云1.1": "云1.1",
-    "云3": "云3",
-    "云3.1": "云3.1",
-    "云4": "云4",
-    "云4.1": "云4.1",
-    "云5": "云5",
-    "云5.1": "云5.1",
-    "云6": "云6",
-    "云6.1": "云6.1",
-    "云V2": "云V2",
-    "云V2.1": "云V2.1",
+    "咪咪1": "咪咪1",
+    "咪咪1.1": "咪咪1.1",
+    "咪咪3": "咪咪3",
+    "咪咪3.1": "咪咪3.1",
+    "咪咪4": "咪咪4",
+    "咪咪4.1": "咪咪4.1",
+    "咪咪5": "咪咪5",
+    "咪咪5.1": "咪咪5.1",
+    "咪咪6": "咪咪6",
+    "咪咪6.1": "咪咪6.1",
+    "咪咪V2": "咪咪V2",
+    "咪咪V2.1": "咪咪V2.1",
+    "逗逗1": "逗逗1",
+    "逗逗1.1": "逗逗1.1",
 })
