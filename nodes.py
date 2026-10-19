@@ -273,7 +273,7 @@ def _build_variants(seed):
     return variants
 
 
-def _generate(model, prompt, aspect, api_key, seed=-1, timeout=86400):
+def _generate(model, prompt, aspect, api_key, seed=-1, timeout=1200):
     url = _BASE_URL + "/v1beta/models/" + model + ":generateContent"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
@@ -297,7 +297,7 @@ def _generate(model, prompt, aspect, api_key, seed=-1, timeout=86400):
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=86400):
+def _edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=1200):
     url = _BASE_URL + "/v1beta/models/" + model + ":generateContent"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
@@ -602,7 +602,7 @@ def _br_parse_result(raw):
     url = item.get("url")
     if url:
         last = None
-        end = time.time() + 86400
+        end = time.time() + 1200
         for _ in range(3):
             remain = int(end - time.time())
             if remain <= 0:
@@ -713,7 +713,7 @@ def _br_build_variants(quality, seed):
     return variants
 
 
-def _img_generate(base_url, model, prompt, size, quality, api_key, seed=-1, timeout=86400, response_format="url"):
+def _img_generate(base_url, model, prompt, size, quality, api_key, seed=-1, timeout=1200, response_format="url"):
     url = base_url + "/v1/images/generations"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
@@ -735,7 +735,7 @@ def _img_generate(base_url, model, prompt, size, quality, api_key, seed=-1, time
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _br_generate(model, prompt, size, quality, api_key, seed=-1, timeout=86400):
+def _br_generate(model, prompt, size, quality, api_key, seed=-1, timeout=1200):
     url = _BR_BASE_URL + "/v1/images/generations/async"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
@@ -768,11 +768,11 @@ def _br_generate(model, prompt, size, quality, api_key, seed=-1, timeout=86400):
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _sm_generate(model, prompt, size, api_key, seed=-1, timeout=86400):
+def _sm_generate(model, prompt, size, api_key, seed=-1, timeout=1200):
     return _img_generate(_BASE_URL, model, prompt, size, None, api_key, seed=seed, timeout=timeout, response_format=None)
 
 
-def _img_edits(base_url, model, prompt, size, quality, ref_items, api_key, seed=-1, timeout=86400, response_format="url"):
+def _img_edits(base_url, model, prompt, size, quality, ref_items, api_key, seed=-1, timeout=1200, response_format="url"):
     url = base_url + "/v1/images/edits"
     last = None
     for variant in _br_build_variants(quality, seed):
@@ -796,7 +796,7 @@ def _img_edits(base_url, model, prompt, size, quality, ref_items, api_key, seed=
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout=86400):
+def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout=1200):
     url = _BR_BASE_URL + "/v1/images/edits/async"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
@@ -830,7 +830,7 @@ def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _sm_edits(model, prompt, size, ref_items, api_key, seed=-1, timeout=86400):
+def _sm_edits(model, prompt, size, ref_items, api_key, seed=-1, timeout=1200):
     return _img_edits(_BASE_URL, model, prompt, size, None, ref_items, api_key, seed=seed, timeout=timeout, response_format=None)
 
 
@@ -963,7 +963,7 @@ def _mj_fetch_images(urls, timeout):
     return [_bytes_to_img_tensor(o) for o in outs]
 
 
-def _mj_generate(prompt, api_key, timeout=86400, max_count=0):
+def _mj_generate(prompt, api_key, timeout=1200, max_count=0):
     last = None
     for attempt in range(2):
         try:
@@ -987,7 +987,7 @@ def _mj_generate(prompt, api_key, timeout=86400, max_count=0):
         if max_count and max_count > 0:
             urls = urls[:max_count]
         try:
-            return _mj_fetch_images(urls, 86400)
+            return _mj_fetch_images(urls, 1200)
         except _ReadError:
             raise
         except RuntimeError as e:
@@ -996,7 +996,7 @@ def _mj_generate(prompt, api_key, timeout=86400, max_count=0):
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _mj_edits(prompt, ref_items, api_key, timeout=86400, max_count=0):
+def _mj_edits(prompt, ref_items, api_key, timeout=1200, max_count=0):
     ref_b64 = [base64.b64encode(b).decode("ascii") for n, b in ref_items]
     last = None
     for attempt in range(2):
@@ -1021,7 +1021,7 @@ def _mj_edits(prompt, ref_items, api_key, timeout=86400, max_count=0):
         if max_count and max_count > 0:
             urls = urls[:max_count]
         try:
-            return _mj_fetch_images(urls, 86400)
+            return _mj_fetch_images(urls, 1200)
         except _ReadError:
             raise
         except RuntimeError as e:
@@ -1574,7 +1574,7 @@ def _gr_fetch_images(urls, timeout):
     return [_bytes_to_img_tensor(o) for o in outs]
 
 
-def _gr_generate(model, prompt, api_key, ar=None, image_size=None, quality=None, seed=None, timeout=86400):
+def _gr_generate(model, prompt, api_key, ar=None, image_size=None, quality=None, seed=None, timeout=1200):
     last = None
     for attempt in range(2):
         try:
@@ -1596,7 +1596,7 @@ def _gr_generate(model, prompt, api_key, ar=None, image_size=None, quality=None,
             last = e
             continue
         try:
-            return _gr_fetch_images(urls, 86400)
+            return _gr_fetch_images(urls, 1200)
         except _ReadError:
             raise
         except RuntimeError as e:
@@ -1605,7 +1605,7 @@ def _gr_generate(model, prompt, api_key, ar=None, image_size=None, quality=None,
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
-def _gr_edits(model, prompt, api_key, ar, image_size, quality, ref_items, seed=None, timeout=86400):
+def _gr_edits(model, prompt, api_key, ar, image_size, quality, ref_items, seed=None, timeout=1200):
     images = [base64.b64encode(b).decode("ascii") for n, b in ref_items]
     last = None
     for attempt in range(2):
@@ -1628,7 +1628,7 @@ def _gr_edits(model, prompt, api_key, ar, image_size, quality, ref_items, seed=N
             last = e
             continue
         try:
-            return _gr_fetch_images(urls, 86400)
+            return _gr_fetch_images(urls, 1200)
         except _ReadError:
             raise
         except RuntimeError as e:
