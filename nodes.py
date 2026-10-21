@@ -130,9 +130,10 @@ def _handle_http(e):
     text = raw.decode("utf-8", "ignore")
     msg = _extract_api_message(raw, text)
     friendly = _categorize_text(msg) or _categorize_text(text)
+    detail = (msg or text).strip()[:300]
     if friendly:
-        raise RuntimeError(friendly)
-    raise RuntimeError(MSG_GENERIC)
+        raise RuntimeError(friendly + " | HTTP " + str(e.code) + ": " + detail)
+    raise RuntimeError("生成失败 HTTP " + str(e.code) + ": " + detail)
 
 
 class _ReadError(RuntimeError):
