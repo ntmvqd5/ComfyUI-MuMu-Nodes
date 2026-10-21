@@ -638,7 +638,7 @@ def _br_poll_task(tid, api_key, timeout):
     while True:
         remain = deadline - time.time()
         if remain <= 0:
-            raise RuntimeError(MSG_TIMEOUT)
+            raise RuntimeError("[bananarouter] 超时 task=" + tid)
         try:
             raw = _request(url, None, headers, min(15, max(5, remain)), method="GET")
         except Exception:
@@ -655,15 +655,15 @@ def _br_poll_task(tid, api_key, timeout):
                 u = it.get("url")
                 if u:
                     return u
-            raise RuntimeError(MSG_GENERIC)
+            raise RuntimeError("[bananarouter] 任务无图片返回 task=" + tid)
         if st in ("failed", "expired", "cancelled", "canceled"):
             msg = data.get("statusMessage") or data.get("error") or ""
             friendly = _categorize_text(msg)
             if friendly:
-                raise RuntimeError(friendly)
+                raise RuntimeError("[bananarouter] " + friendly + " task=" + tid)
             if msg:
-                raise RuntimeError(MSG_GENERIC + "（" + str(msg).strip()[:100] + "）")
-            raise RuntimeError(MSG_GENERIC)
+                raise RuntimeError("[bananarouter] 生成失败 task=" + tid + " | " + str(msg).strip()[:200])
+            raise RuntimeError("[bananarouter] 生成失败 task=" + tid)
         time.sleep(5)
 
 
@@ -751,17 +751,17 @@ def _br_generate(model, prompt, size, quality, api_key, seed=-1, timeout=1200):
                 break
             tid = data.get("taskID")
             if not tid:
-                raise RuntimeError(MSG_GENERIC)
+                raise RuntimeError("[bananarouter] 提交成功但未返回taskID")
             try:
                 img_url = _br_poll_task(tid, api_key, timeout)
             except RuntimeError as e:
                 _br_cancel(tid, api_key)
-                if str(e) in (MSG_VIOLATION, MSG_SIZE_TOO_LARGE):
+                if str(e).startswith("[bananarouter] 内容违规") or MSG_VIOLATION in str(e) or MSG_SIZE_TOO_LARGE in str(e):
                     raise
                 last = e
                 continue
             return _br_download_retry(img_url, 1200)
-    raise last if last else RuntimeError(MSG_GENERIC)
+    raise last if last else RuntimeError("[bananarouter] 提交失败")
 
 
 def _sm_generate(model, prompt, size, api_key, seed=-1, timeout=1200):
@@ -813,17 +813,17 @@ def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout
                 break
             tid = data.get("taskID")
             if not tid:
-                raise RuntimeError(MSG_GENERIC)
+                raise RuntimeError("[bananarouter] 提交成功但未返回taskID")
             try:
                 img_url = _br_poll_task(tid, api_key, timeout)
             except RuntimeError as e:
                 _br_cancel(tid, api_key)
-                if str(e) in (MSG_VIOLATION, MSG_SIZE_TOO_LARGE):
+                if str(e).startswith("[bananarouter] 内容违规") or MSG_VIOLATION in str(e) or MSG_SIZE_TOO_LARGE in str(e):
                     raise
                 last = e
                 continue
             return _br_download_retry(img_url, 1200)
-    raise last if last else RuntimeError(MSG_GENERIC)
+    raise last if last else RuntimeError("[bananarouter] 提交失败")
 
 
 def _sm_edits(model, prompt, size, ref_items, api_key, seed=-1, timeout=1200):
@@ -906,7 +906,7 @@ def _mj_submit(prompt, api_key, ref_b64=None):
         raise RuntimeError(MSG_GENERIC)
     tid = obj.get("result")
     if not tid:
-        raise RuntimeError(MSG_GENERIC)
+        raise RuntimeError("[MJ] 提交成功但未返回taskID: " + str(obj)[:200])
     return tid
 
 
@@ -917,7 +917,7 @@ def _mj_poll(tid, api_key, timeout):
     while True:
         remain = deadline - time.time()
         if remain <= 0:
-            raise RuntimeError(MSG_TIMEOUT)
+            raise RuntimeError("[bananarouter] 超时 task=" + tid)
         try:
             raw = _request(url, None, headers, min(15, max(5, remain)), method="GET")
         except Exception:
@@ -933,15 +933,15 @@ def _mj_poll(tid, api_key, timeout):
             urls = [it.get("url") for it in (data.get("imageUrls") or []) if it.get("url")]
             if urls:
                 return urls
-            raise RuntimeError(MSG_GENERIC)
+            raise RuntimeError("[MJ] 任务无图片返回 task=" + tid)
         if st in ("FAILURE", "EXPIRED", "CANCELLED", "CANCELED"):
             msg = data.get("failReason") or data.get("error") or ""
             friendly = _categorize_text(msg)
             if friendly:
-                raise RuntimeError(friendly)
+                raise RuntimeError("[MJ] " + friendly + " task=" + tid)
             if msg:
-                raise RuntimeError(MSG_GENERIC + "（" + str(msg).strip()[:100] + "）")
-            raise RuntimeError(MSG_GENERIC)
+                raise RuntimeError("[MJ] 生成失败 task=" + tid + " | " + str(msg).strip()[:200])
+            raise RuntimeError("[MJ] 生成失败 task=" + tid)
         time.sleep(5)
 
 
@@ -1504,7 +1504,7 @@ def _gr_submit(model, prompt, api_key, ar=None, image_size=None, quality=None, i
     resp = _gr_req("POST", "/v1/api/generate", api_key, payload, timeout=timeout)
     tid = resp.get("id")
     if not tid:
-        raise RuntimeError(MSG_GENERIC)
+        raise RuntimeError("[grsai] 提交成功但未返回taskID: " + str(resp)[:200])
     return tid
 
 
@@ -1513,7 +1513,7 @@ def _gr_poll(tid, api_key, timeout):
     while True:
         remain = deadline - time.time()
         if remain <= 0:
-            raise RuntimeError(MSG_TIMEOUT)
+            raise RuntimeError("[grsai] 超时 task=" + tid)
         try:
             data = _gr_req("GET", "/v1/api/result", api_key, params={"id": tid}, timeout=min(30, max(10, remain)))
         except Exception:
@@ -1523,16 +1523,16 @@ def _gr_poll(tid, api_key, timeout):
         if st == "succeeded":
             urls = [x.get("url") for x in (data.get("results") or []) if isinstance(x, dict) and x.get("url")]
             if not urls:
-                raise RuntimeError(MSG_GENERIC)
+                raise RuntimeError("[grsai] 任务无图片返回 task=" + tid)
             return urls
         if st in ("failed", "violation", "cancelled", "canceled"):
             reason = str(data.get("failure_reason") or "")
             if "moderation" in reason or st == "violation":
-                raise RuntimeError(MSG_VIOLATION)
-            msg = data.get("error") or ""
+                raise RuntimeError("[grsai] 内容违规 task=" + tid)
+            msg = data.get("error") or data.get("failure_reason") or ""
             if msg:
-                raise RuntimeError(MSG_GENERIC + "（" + str(msg).strip()[:100] + "）")
-            raise RuntimeError(MSG_GENERIC)
+                raise RuntimeError("[grsai] 生成失败 task=" + tid + " | " + str(msg).strip()[:200])
+            raise RuntimeError("[grsai] 生成失败 task=" + tid)
         time.sleep(2)
 
 
