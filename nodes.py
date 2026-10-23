@@ -152,11 +152,14 @@ def _read_all(resp, timeout):
         buf.write(chunk)
 
 
-def _request(url, data, headers, timeout, method="POST"):
+def _request(url, data, headers, timeout, method="POST", want_meta=False):
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return _read_all(resp, timeout)
+            raw = _read_all(resp, timeout)
+            if want_meta:
+                return raw, dict(resp.headers)
+            return raw
     except urllib.error.HTTPError as e:
         _handle_http(e)
     except (socket.timeout, TimeoutError):
@@ -169,7 +172,10 @@ def _request(url, data, headers, timeout, method="POST"):
             req2 = urllib.request.Request(url, data=data, headers=headers, method=method)
             try:
                 with urllib.request.urlopen(req2, timeout=timeout, context=ctx) as resp:
-                    return _read_all(resp, timeout)
+                    raw = _read_all(resp, timeout)
+                    if want_meta:
+                        return raw, dict(resp.headers)
+                    return raw
             except urllib.error.HTTPError as e2:
                 _handle_http(e2)
             except (socket.timeout, TimeoutError):
@@ -236,6 +242,21 @@ def _img_tensor_to_bytes(img_tensor):
     return out
 
 
+def _extract_req_id(raw, hdrs=None):
+    for key in ("x-request-id", "request-id", "x-requestid", "x-gdg-request-id", "x-goog-request-id"):
+        v = (hdrs or {}).get(key)
+        if v:
+            return str(v).strip()[:80]
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+        rid = obj.get("responseId") or obj.get("requestId") or obj.get("id")
+        if rid:
+            return str(rid).strip()[:80]
+    except Exception:
+        pass
+    return None
+
+
 def _parse_result(raw):
     try:
         result = json.loads(raw.decode("utf-8"))
@@ -273,6 +294,7 @@ def _generate(model, prompt, aspect, api_key, seed=-1, timeout=1200):
     url = _BASE_URL + "/v1beta/models/" + model + ":generateContent"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
+    req_id = None
     for extra in _build_variants(seed):
         cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
         cfg.update(extra)
@@ -281,14 +303,20 @@ def _generate(model, prompt, aspect, api_key, seed=-1, timeout=1200):
             "generationConfig": cfg,
         }
         try:
-            raw = _request(url, json.dumps(payload).encode("utf-8"), headers, timeout)
+            raw, hdrs = _request(url, json.dumps(payload).encode("utf-8"), headers, timeout, want_meta=True)
         except _ReadError:
             raise
         except RuntimeError as e:
             if str(e) in (MSG_VIOLATION, MSG_SIZE_TOO_LARGE):
                 raise
-            last = e
+            if req_id:
+                last = RuntimeError(str(e) + " | 请求ID: " + req_id)
+            else:
+                last = RuntimeError(str(e) + " | 请求ID: 无（上游未响应）")
             continue
+        rid = _extract_req_id(raw, hdrs)
+        if rid:
+            req_id = rid
         return _parse_result(raw)
     raise last if last else RuntimeError(MSG_GENERIC)
 
@@ -297,6 +325,7 @@ def _edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=1200):
     url = _BASE_URL + "/v1beta/models/" + model + ":generateContent"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     last = None
+    req_id = None
     for extra in _build_variants(seed):
         parts = [{"text": prompt}]
         for n, b in ref_items:
@@ -311,14 +340,20 @@ def _edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=1200):
         cfg.update(extra)
         payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": cfg}
         try:
-            raw = _request(url, json.dumps(payload).encode("utf-8"), headers, timeout)
+            raw, hdrs = _request(url, json.dumps(payload).encode("utf-8"), headers, timeout, want_meta=True)
         except _ReadError:
             raise
         except RuntimeError as e:
             if str(e) in (MSG_VIOLATION, MSG_SIZE_TOO_LARGE):
                 raise
-            last = e
+            if req_id:
+                last = RuntimeError(str(e) + " | 请求ID: " + req_id)
+            else:
+                last = RuntimeError(str(e) + " | 请求ID: 无（上游未响应）")
             continue
+        rid = _extract_req_id(raw, hdrs)
+        if rid:
+            req_id = rid
         return _parse_result(raw)
     raise last if last else RuntimeError(MSG_GENERIC)
 
