@@ -474,28 +474,6 @@ class NineWanLiPluginV2_1(_Image2Image):
     DESCRIPTION = "测试节点 请勿使用"
 
 
-class _BRAsyncText2Image(_Text2Image):
-    def generate(self, api_key, prompt, resolution, aspect, seed=-1):
-        model = _resolve_model(self.SERIES, resolution)
-        tensors = _br_async_generate(model, prompt, aspect, api_key, seed=seed)
-        return (_pack_output(tensors),)
-
-
-class _BRAsyncImage2Image(_Image2Image):
-    def generate(self, api_key, resolution, aspect, seed=-1, prompt="", **kwargs):
-        model = _resolve_model(self.SERIES, resolution)
-        imgs = [kwargs.get(k) for k in _IMAGE_KEYS]
-        slots = {i + 1: imgs[i] for i in range(10) if imgs[i] is not None}
-        if not slots:
-            if aspect == "auto":
-                aspect = "1:1"
-            tensors = _br_async_generate(model, prompt, aspect, api_key, seed=seed)
-        else:
-            ref_items = [(n, _img_tensor_to_bytes(val)[0]) for n, val in sorted(slots.items())]
-            tensors = _br_async_edits(model, prompt, aspect, ref_items, api_key, seed=seed)
-        return (_pack_output(tensors),)
-
-
 class _SMStreamText2Image(_Text2Image):
     def generate(self, api_key, prompt, resolution, aspect, seed=-1):
         model = _resolve_model(self.SERIES, resolution)
@@ -526,42 +504,6 @@ class NineWanLiPluginStream2(_SMStreamText2Image):
 class NineWanLiPluginStream2_1(_SMStreamImage2Image):
     SERIES = "banana_v2"
     DESCRIPTION = "测试节点 请勿使用"
-
-
-class NineWanLiPlugin2Reset(_BRAsyncText2Image):
-    SERIES = "banana_v2"
-    DESCRIPTION = "测试节点 请勿使用"
-
-
-class NineWanLiPlugin2_1Reset(_BRAsyncImage2Image):
-    SERIES = "banana_v2"
-    DESCRIPTION = "测试节点 请勿使用"
-
-
-class NineWanLiPlugin3Reset(_BRAsyncText2Image):
-    SERIES = "banana_pro"
-    DESCRIPTION = "测试节点 请勿使用"
-
-
-class NineWanLiPlugin3_1Reset(_BRAsyncImage2Image):
-    SERIES = "banana_pro"
-    DESCRIPTION = "测试节点 请勿使用"
-
-
-class NineWanLiPluginV2Reset(_BRAsyncText2Image):
-    SERIES = "banana_v21"
-    RESOLUTIONS = ["4K"]
-    DESCRIPTION = "测试节点 请勿使用"
-
-
-class NineWanLiPluginV2_1Reset(_BRAsyncImage2Image):
-    SERIES = "banana_v21"
-    RESOLUTIONS = ["4K"]
-    DESCRIPTION = "测试节点 请勿使用"
-
-
-
-import uuid
 
 
 def _br_multipart(fields, files):
@@ -949,83 +891,6 @@ def _br_edits(model, prompt, size, quality, ref_items, api_key, seed=-1, timeout
 
 def _sm_edits(model, prompt, size, ref_items, api_key, seed=-1, timeout=1200):
     return _img_edits(_BASE_URL, model, prompt, size, None, ref_items, api_key, seed=seed, timeout=timeout, response_format=None)
-
-
-def _br_async_submit_gemini(model, payload, api_key):
-    url = _BR_BASE_URL + "/v1beta/models/" + model + ":asyncGenerateContent"
-    headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
-    try:
-        raw = _request(url, json.dumps(payload).encode("utf-8"), headers, 30)
-    except _ReadError:
-        raise
-    except RuntimeError:
-        raise
-    try:
-        obj = json.loads(raw.decode("utf-8"))
-    except Exception:
-        raise RuntimeError(MSG_GENERIC)
-    tid = obj.get("taskID")
-    if not tid:
-        raise RuntimeError("[bananarouter] 提交成功但未返回taskID: " + str(obj)[:200])
-    return tid
-
-
-def _br_async_generate(model, prompt, aspect, api_key, seed=-1, timeout=1200):
-    last = None
-    for extra in _build_variants(seed):
-        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
-        cfg.update(extra)
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": cfg,
-        }
-        try:
-            tid = _br_async_submit_gemini(model, payload, api_key)
-        except RuntimeError as e:
-            if str(e) in (MSG_VIOLATION, MSG_SIZE_TOO_LARGE):
-                raise
-            last = e
-            continue
-        try:
-            img_url = _br_poll_task(tid, api_key, timeout)
-        except RuntimeError as e:
-            _br_cancel(tid, api_key)
-            last = e
-            continue
-        return _br_download_retry(img_url, 1200)
-    raise last if last else RuntimeError(MSG_GENERIC)
-
-
-def _br_async_edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=1200):
-    last = None
-    for extra in _build_variants(seed):
-        parts = [{"text": prompt}]
-        for n, b in ref_items:
-            parts.append({"text": "图%d" % n})
-            parts.append({
-                "inlineData": {
-                    "mimeType": "image/png",
-                    "data": base64.b64encode(b).decode("ascii"),
-                }
-            })
-        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
-        cfg.update(extra)
-        payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": cfg}
-        try:
-            tid = _br_async_submit_gemini(model, payload, api_key)
-        except RuntimeError as e:
-            if str(e) in (MSG_VIOLATION, MSG_SIZE_TOO_LARGE):
-                raise
-            last = e
-            continue
-        try:
-            img_url = _br_poll_task(tid, api_key, timeout)
-        except RuntimeError as e:
-            _br_cancel(tid, api_key)
-            last = e
-            continue
-        return _br_download_retry(img_url, 1200)
-    raise last if last else RuntimeError(MSG_GENERIC)
 
 
 def _stream_request(url, data, headers, idle=90, total=1200):
@@ -1753,12 +1618,6 @@ NODE_CLASS_MAPPINGS = {
     "NineWanLiPluginV8": NineWanLiPluginV8,
     "NineWanLiPluginV8_1": NineWanLiPluginV8_1,
     "NineWanLiPlugin5_6": NineWanLiPlugin5_6,
-    "NineWanLiPlugin2Reset": NineWanLiPlugin2Reset,
-    "NineWanLiPlugin2_1Reset": NineWanLiPlugin2_1Reset,
-    "NineWanLiPlugin3Reset": NineWanLiPlugin3Reset,
-    "NineWanLiPlugin3_1Reset": NineWanLiPlugin3_1Reset,
-    "NineWanLiPluginV2Reset": NineWanLiPluginV2Reset,
-    "NineWanLiPluginV2_1Reset": NineWanLiPluginV2_1Reset,
     "NineWanLiPluginStream2": NineWanLiPluginStream2,
     "NineWanLiPluginStream2_1": NineWanLiPluginStream2_1,
 }
@@ -1779,12 +1638,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "NineWanLiPluginV8": "南南V8",
     "NineWanLiPluginV8_1": "南南V8.1",
     "NineWanLiPlugin5_6": "南南5.6",
-    "NineWanLiPlugin2Reset": "木木2重置修改",
-    "NineWanLiPlugin2_1Reset": "木木2.1重置修改",
-    "NineWanLiPlugin3Reset": "木木3重置修改",
-    "NineWanLiPlugin3_1Reset": "木木3.1重置修改",
-    "NineWanLiPluginV2Reset": "木木V2重置修改",
-    "NineWanLiPluginV2_1Reset": "木木V2.1重置修改",
     "NineWanLiPluginStream2": "木木2流式测试",
     "NineWanLiPluginStream2_1": "木木2.1流式测试",
 }
