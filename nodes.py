@@ -496,6 +496,38 @@ class _BRAsyncImage2Image(_Image2Image):
         return (_pack_output(tensors),)
 
 
+class _SMStreamText2Image(_Text2Image):
+    def generate(self, api_key, prompt, resolution, aspect, seed=-1):
+        model = _resolve_model(self.SERIES, resolution)
+        tensors = _sm_stream_generate(model, prompt, aspect, api_key, seed=seed)
+        return (_pack_output(tensors),)
+
+
+class _SMStreamImage2Image(_Image2Image):
+    def generate(self, api_key, resolution, aspect, seed=-1, prompt="", **kwargs):
+        model = _resolve_model(self.SERIES, resolution)
+        imgs = [kwargs.get(k) for k in _IMAGE_KEYS]
+        slots = {i + 1: imgs[i] for i in range(10) if imgs[i] is not None}
+        if not slots:
+            if aspect == "auto":
+                aspect = "1:1"
+            tensors = _sm_stream_generate(model, prompt, aspect, api_key, seed=seed)
+        else:
+            ref_items = [(n, _img_tensor_to_bytes(val)[0]) for n, val in sorted(slots.items())]
+            tensors = _sm_stream_edits(model, prompt, aspect, ref_items, api_key, seed=seed)
+        return (_pack_output(tensors),)
+
+
+class NineWanLiPluginStream2(_SMStreamText2Image):
+    SERIES = "banana_v2"
+    DESCRIPTION = "测试节点 请勿使用"
+
+
+class NineWanLiPluginStream2_1(_SMStreamImage2Image):
+    SERIES = "banana_v2"
+    DESCRIPTION = "测试节点 请勿使用"
+
+
 class NineWanLiPlugin2Reset(_BRAsyncText2Image):
     SERIES = "banana_v2"
     DESCRIPTION = "测试节点 请勿使用"
@@ -993,6 +1025,167 @@ def _br_async_edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=
             last = e
             continue
         return _br_download_retry(img_url, 1200)
+    raise last if last else RuntimeError(MSG_GENERIC)
+
+
+def _stream_request(url, data, headers, idle=90, total=1200):
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=idle) as resp:
+            buf = io.BytesIO()
+            end = time.time() + total
+            while time.time() < end:
+                try:
+                    chunk = resp.read(65536)
+                except socket.timeout:
+                    raise _ReadError(MSG_TIMEOUT)
+                if not chunk:
+                    return buf.getvalue()
+                buf.write(chunk)
+            raise _ReadError(MSG_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        _handle_http(e)
+    except (socket.timeout, TimeoutError):
+        raise _ReadError(MSG_TIMEOUT)
+    except http.client.IncompleteRead:
+        raise _ReadError(MSG_TIMEOUT)
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ssl.SSLCertVerificationError):
+            ctx = ssl._create_unverified_context()
+            req2 = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req2, timeout=idle, context=ctx) as resp:
+                    buf = io.BytesIO()
+                    end = time.time() + total
+                    while time.time() < end:
+                        try:
+                            chunk = resp.read(65536)
+                        except socket.timeout:
+                            raise _ReadError(MSG_TIMEOUT)
+                        if not chunk:
+                            return buf.getvalue()
+                        buf.write(chunk)
+                    raise _ReadError(MSG_TIMEOUT)
+            except urllib.error.HTTPError as e2:
+                _handle_http(e2)
+            except (socket.timeout, TimeoutError):
+                raise _ReadError(MSG_TIMEOUT)
+            except http.client.IncompleteRead:
+                raise _ReadError(MSG_TIMEOUT)
+            except urllib.error.URLError:
+                raise RuntimeError(MSG_TIMEOUT)
+            except ConnectionError:
+                raise RuntimeError(MSG_GENERIC)
+            except http.client.HTTPException:
+                raise RuntimeError(MSG_GENERIC)
+        raise RuntimeError(MSG_TIMEOUT)
+    except ConnectionError:
+        raise RuntimeError(MSG_GENERIC)
+    except http.client.HTTPException:
+        raise RuntimeError(MSG_GENERIC)
+
+
+def _parse_stream_images(raw):
+    images = []
+    try:
+        text = raw.decode("utf-8", "ignore")
+    except Exception:
+        return images
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            obj = json.loads(data)
+        except Exception:
+            continue
+        try:
+            cand = obj["candidates"][0]
+        except Exception:
+            continue
+        for part in cand.get("content", {}).get("parts", []):
+            if "inlineData" in part and "data" in part["inlineData"]:
+                try:
+                    images.append(base64.b64decode(part["inlineData"]["data"]))
+                except Exception:
+                    pass
+    return images
+
+
+def _sm_stream_generate(model, prompt, aspect, api_key, seed=-1, timeout=1200):
+    last = None
+    for extra in _build_variants(seed):
+        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
+        cfg.update(extra)
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": cfg,
+        }
+        url = _BASE_URL + "/v1beta/models/" + model + ":streamGenerateContent"
+        headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
+        try:
+            raw = _stream_request(url, json.dumps(payload).encode("utf-8"), headers, idle=90, total=timeout)
+        except _ReadError:
+            raise
+        except RuntimeError as e:
+            last = e
+            continue
+        imgs = _parse_stream_images(raw)
+        if not imgs:
+            last = RuntimeError("生成失败（流式接口未返回图片）")
+            continue
+        tensors = []
+        for b in imgs:
+            try:
+                tensors.append(_bytes_to_img_tensor(b))
+            except Exception:
+                pass
+        if tensors:
+            return tensors
+        last = RuntimeError("生成失败（流式返回的图片无法解析）")
+    raise last if last else RuntimeError(MSG_GENERIC)
+
+
+def _sm_stream_edits(model, prompt, aspect, ref_items, api_key, seed=-1, timeout=1200):
+    last = None
+    for extra in _build_variants(seed):
+        parts = [{"text": prompt}]
+        for n, b in ref_items:
+            parts.append({"text": "图%d" % n})
+            parts.append({
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": base64.b64encode(b).decode("ascii"),
+                }
+            })
+        cfg = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": aspect}}
+        cfg.update(extra)
+        payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": cfg}
+        url = _BASE_URL + "/v1beta/models/" + model + ":streamGenerateContent"
+        headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
+        try:
+            raw = _stream_request(url, json.dumps(payload).encode("utf-8"), headers, idle=90, total=timeout)
+        except _ReadError:
+            raise
+        except RuntimeError as e:
+            last = e
+            continue
+        imgs = _parse_stream_images(raw)
+        if not imgs:
+            last = RuntimeError("生成失败（流式接口未返回图片）")
+            continue
+        tensors = []
+        for b in imgs:
+            try:
+                tensors.append(_bytes_to_img_tensor(b))
+            except Exception:
+                pass
+        if tensors:
+            return tensors
+        last = RuntimeError("生成失败（流式返回的图片无法解析）")
     raise last if last else RuntimeError(MSG_GENERIC)
 
 
@@ -1566,6 +1759,8 @@ NODE_CLASS_MAPPINGS = {
     "NineWanLiPlugin3_1Reset": NineWanLiPlugin3_1Reset,
     "NineWanLiPluginV2Reset": NineWanLiPluginV2Reset,
     "NineWanLiPluginV2_1Reset": NineWanLiPluginV2_1Reset,
+    "NineWanLiPluginStream2": NineWanLiPluginStream2,
+    "NineWanLiPluginStream2_1": NineWanLiPluginStream2_1,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1590,6 +1785,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "NineWanLiPlugin3_1Reset": "木木3.1重置修改",
     "NineWanLiPluginV2Reset": "木木V2重置修改",
     "NineWanLiPluginV2_1Reset": "木木V2.1重置修改",
+    "NineWanLiPluginStream2": "木木2流式测试",
+    "NineWanLiPluginStream2_1": "木木2.1流式测试",
 }
 
 for _cls in [NineWanLiPlugin2, NineWanLiPlugin2_1, NineWanLiPlugin3, NineWanLiPlugin3_1,
